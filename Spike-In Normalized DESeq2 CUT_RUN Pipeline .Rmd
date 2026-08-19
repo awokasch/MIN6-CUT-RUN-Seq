@@ -1,0 +1,1934 @@
+---
+title: "CUT&RUN Pdx1∆207 lost and retained peaks Diff. Analysis"
+author: "Anthony Wokasch"
+date: "2026-08-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(DESeq2)
+library(ChIPseeker)
+library(txdbmaker)
+library(org.Mm.eg.db)
+library(GenomicRanges)
+library(ComplexHeatmap)
+library(circlize)
+library(Cairo)
+library(ggplot2)
+library(ggforce)
+library(cowplot)
+
+Sys.setenv(PATH = paste(
+  "/Volumes/One Touch/homer/bin",
+  "/Users/anthonywokasch/micromamba/envs/utilities/bin",
+  Sys.getenv("PATH"),
+  sep = ":"
+))
+
+system("sed -i '' 's/return $plotXY(/return $plotXY->(/g' 
+       '/Volumes/One Touch/homer/bin/HomerSVGLogo.pm'")
+
+setwd("/Volumes/One Touch/CUT_RUN")
+
+options(ucscChromosomeNames = FALSE)
+```
+
+
+```{r}
+# ===== MERGE REPLICATES PER CONDITION =====
+# Using deeptools bigwigAverage to merge replicates
+
+system("mkdir -p bigwig_files/spikein_merged")
+
+# Merge WT replicates
+cmd_merge_wt <- paste(
+  "bigwigAverage",
+  "-b bigwig_files/spikein_normalized/WT_1_spikein.bw",
+  "bigwig_files/spikein_normalized/WT_2_spikein.bw",
+  "bigwig_files/spikein_normalized/WT_3_spikein.bw",
+  "--binSize 10",
+  "-p max",
+  "-o bigwig_files/spikein_merged/WT_merged_spikein.bw"
+)
+
+# Merge DeltaC replicates
+cmd_merge_deltac <- paste(
+  "bigwigAverage",
+  "-b bigwig_files/spikein_normalized/DeltaC_4_spikein.bw",
+  "bigwig_files/spikein_normalized/DeltaC_5_spikein.bw",
+  "bigwig_files/spikein_normalized/DeltaC_6_spikein.bw",
+  "--binSize 10",
+  "-p max",
+  "-o bigwig_files/spikein_merged/DeltaC_merged_spikein.bw"
+)
+
+# Merge Delta207 replicates
+cmd_merge_delta207 <- paste(
+  "bigwigAverage",
+  "-b bigwig_files/spikein_normalized/Delta207_7_spikein.bw",
+  "bigwig_files/spikein_normalized/Delta207_8_spikein.bw",
+  "bigwig_files/spikein_normalized/Delta207_9_spikein.bw",
+  "--binSize 10",
+  "-p max",
+  "-o bigwig_files/spikein_merged/Delta207_merged_spikein.bw"
+)
+
+# Merge Delta216 replicates
+cmd_merge_delta216 <- paste(
+  "bigwigAverage",
+  "-b bigwig_files/spikein_normalized/Delta216_10_spikein.bw",
+  "bigwig_files/spikein_normalized/Delta216_11_spikein.bw",
+  "bigwig_files/spikein_normalized/Delta216_12_spikein.bw",
+  "--binSize 10",
+  "-p max",
+  "-o bigwig_files/spikein_merged/Delta216_merged_spikein.bw"
+)
+
+# Merge mCherry replicates
+cmd_merge_mcherry <- paste(
+  "bigwigAverage",
+  "-b bigwig_files/spikein_normalized/mCherry_16_spikein.bw",
+  "bigwig_files/spikein_normalized/mCherry_17_spikein.bw",
+  "bigwig_files/spikein_normalized/mCherry_18_spikein.bw",
+  "--binSize 10",
+  "-p max",
+  "-o bigwig_files/spikein_merged/mCherry_merged_spikein.bw"
+)
+
+print("Merging WT replicates...")
+system(cmd_merge_wt)
+
+print("Merging DeltaC replicates...")
+system(cmd_merge_deltac)
+
+print("Merging Delta207 replicates...")
+system(cmd_merge_delta207)
+
+print("Merging Delta216 replicates...")
+system(cmd_merge_delta216)
+
+print("Merging mCherry replicates...")
+system(cmd_merge_mcherry)
+
+
+merged_files <- list.files(
+  "bigwig_files/spikein_merged/",
+  pattern = "*.bw"
+)
+print(paste("Merged bigwigs created:", 
+            length(merged_files)))
+print(merged_files)
+```
+```{r}
+cmd_merge_h3k4me3 <- paste(
+  "bigwigAverage",
+  "-b bigwig_files/spikein_normalized/H3K4me3_13_spikein.bw",
+  "bigwig_files/spikein_normalized/H3K4me3_14_spikein.bw",
+  "bigwig_files/spikein_normalized/H3K4me3_15_spikein.bw",
+  "--binSize 10",
+  "-p max",
+  "-o bigwig_files/spikein_merged/H3K4me3_merged_spikein.bw"
+)
+
+print("Merging H3K4me3 replicates...")
+system(cmd_merge_h3k4me3)
+```
+
+```{r}
+library(ggplot2)
+library(scales)
+library(Cairo)
+install.packages("ggtext")
+library(ggtext)
+
+mcherry_counts <- c(6781392, 10955773, 14291912)
+mcherry_samples <- c("mCherry_16", "mCherry_17", "mCherry_18")
+
+ecoli_df_all <- data.frame(
+  sample = c(sample_names, mcherry_samples),
+  ecoli_reads = c(ecoli_counts, mcherry_counts),
+  condition = factor(c("WT","WT","WT",
+                       "DeltaC","DeltaC","DeltaC",
+                       "Delta207","Delta207","Delta207",
+                       "Delta216","Delta216","Delta216",
+                       "mCherry","mCherry","mCherry"),
+                     levels = c("WT","Delta207","Delta216","DeltaC","mCherry"))
+)
+
+condition_colors <- c(
+  "WT"       = "black",
+  "Delta207" = "#6BAED6",
+  "Delta216" = "#31A354",
+  "DeltaC"   = "#FF8C00",
+  "mCherry"  = "#FF3333"
+)
+
+condition_labels <- c(
+  "WT"       = "WT",
+  "Delta207" = "Pdx1∆207",
+  "Delta216" = "Pdx1∆216",
+  "DeltaC"   = "Pdx1∆C",
+  "mCherry"  = "mCherry-EV"
+)
+
+p_combined <- ggplot(ecoli_df_all, aes(x = condition, y = ecoli_reads,
+                                        color = condition, fill = condition)) +
+  geom_boxplot(alpha = 0.2, outlier.shape = NA, width = 0.5) +
+  geom_jitter(width = 0.1, size = 2.5) +
+  annotate("text",
+           x = "Delta207",
+           y = max(ecoli_df_all$ecoli_reads[ecoli_df_all$condition == "Delta207"]) * 1.15,
+           label = "2.79x",
+           color = "#6BAED6",
+           fontface = "bold",
+           size = 3.5) +
+  scale_color_manual(values = condition_colors, labels = condition_labels) +
+  scale_fill_manual(values = condition_colors, labels = condition_labels) +
+  scale_x_discrete(labels = condition_labels) +
+  scale_y_log10(labels = comma,
+                limits = c(
+                  min(ecoli_df_all$ecoli_reads) * 0.85,
+                  max(ecoli_df_all$ecoli_reads) * 1.15
+                )) +
+labs(
+    title = "<i>E. coli</i> Spike-in Read Counts",
+    subtitle = "Higher <i>E. coli</i> reads indicates less total Pdx1-bound chromatin",
+    x = "Condition",
+    y = "<i>E. coli</i> Reads (log10)"
+  ) +
+  theme_classic() +
+  theme(
+    plot.title = element_markdown(face = "bold", size = 12),
+    plot.subtitle = element_markdown(color = "#5b7fa6", size = 9),
+    axis.title.y = element_markdown(size = 10),
+    legend.position = "none",
+    axis.text.x = element_text(face = "bold", size = 12)
+  )
+
+Cairo::Cairo(
+  file = "/Volumes/One Touch/CUT_RUN/Ecoli_spikein_boxplot.png",
+  bg = "white", type = "png",
+  units = "in", width = 6, height = 5,
+  pointsize = 12, dpi = 300
+)
+print(p_combined)
+dev.off()
+```
+
+
+```{r}
+colData$condition <- factor(colData$condition, 
+                            levels = c("WT", "Delta207", "Delta216", "DeltaC"))
+
+dds_spikein <- DESeqDataSetFromMatrix(
+  countData = countData,
+  colData = colData,
+  design = ~ condition
+)
+
+sizeFactors(dds_spikein) <- spike_size_factors
+dds_spikein <- estimateDispersions(dds_spikein)
+dds_spikein <- nbinomWaldTest(dds_spikein)
+
+vsd_spikein <- varianceStabilizingTransformation(dds_spikein)
+
+PCA_spikein <- plotPCA(vsd_spikein,
+                        intgroup = "condition") +
+  geom_mark_hull(
+    aes(color = group,
+        fill = group),
+    alpha = 0.1,
+    expand = unit(3, "mm")
+  ) +
+
+  expand_limits(y = c(-28, 12)) +
+  scale_color_manual(
+    values = c(
+      "WT" = "black",
+      "Delta207" = "#6BAED6",
+      "Delta216" = "#31A354",
+      "DeltaC" = "#FF8C00"
+    ),
+    labels = c(
+      "WT" = "WT",
+      "Delta207" = "Pdx1∆207",
+      "Delta216" = "Pdx1∆216",
+      "DeltaC" = "Pdx1∆C"
+    ),
+
+    breaks = c("WT", "Delta207", "Delta216", "DeltaC")
+  ) +
+  scale_fill_manual(
+    values = c(
+      "WT" = "black",
+      "Delta207" = "#6BAED6",
+      "Delta216" = "#31A354",
+      "DeltaC" = "#FF8C00"
+    ),
+    labels = c(
+      "WT" = "WT",
+      "Delta207" = "Pdx1∆207",
+      "Delta216" = "Pdx1∆216",
+      "DeltaC" = "Pdx1∆C"
+    ),
+
+    breaks = c("WT", "Delta207", "Delta216", "DeltaC")
+  ) +
+  ggtitle("Pdx1 CUT&RUN PCA (Spike-in normalized)") +
+  theme_classic()
+
+PCA_spikein
+
+Cairo::Cairo(
+  file = "/Volumes/One Touch/CUT_RUN/Pdx1_spikein_PCA_ellipse.png",
+  bg = "white", type = "png",
+  units = "in", width = 5, height = 5,
+  pointsize = 12, dpi = 300
+)
+print(PCA_spikein)
+dev.off()
+```
+
+
+```{r}
+# ===== SPIKE-IN RESULTS =====
+peakid <- function(df){
+  df %>%
+    mutate(peakid = paste(chr, start, end, sep = ".")) %>%
+    relocate(peakid, .before = "chr")
+}
+
+
+library(tidyverse)
+library(dplyr)
+
+result_spikein_Delta207 <- results(dds_spikein,
+  contrast = c("condition", "Delta207", "WT")) %>%
+  as.data.frame() %>%
+  cbind(count[,c(1,2,3,4)], .) %>%
+  peakid()
+
+result_spikein_DeltaC <- results(dds_spikein,
+  contrast = c("condition", "DeltaC", "WT")) %>%
+  as.data.frame() %>%
+  cbind(count[,c(1,2,3,4)], .) %>%
+  peakid()
+
+result_spikein_Delta216 <- results(dds_spikein,
+  contrast = c("condition", "Delta216", "WT")) %>%
+  as.data.frame() %>%
+  cbind(count[,c(1,2,3,4)], .) %>%
+  peakid()
+
+
+write.table(result_spikein_Delta207,
+  file = "/Volumes/One Touch/CUT_RUN/Pdx1_spikein_WT_vs_Delta207.txt",
+  sep = "\t", row.names = FALSE, quote = FALSE)
+
+write.table(result_spikein_DeltaC,
+  file = "/Volumes/One Touch/CUT_RUN/Pdx1_spikein_WT_vs_DeltaC.txt",
+  sep = "\t", row.names = FALSE, quote = FALSE)
+
+write.table(result_spikein_Delta216,
+  file = "/Volumes/One Touch/CUT_RUN/Pdx1_spikein_WT_vs_Delta216.txt",
+  sep = "\t", row.names = FALSE, quote = FALSE)
+```
+
+```{r}
+# ===== SPIKE-IN SIGNIFICANT PEAKS =====
+Delta207_sig_spikein <- result_spikein_Delta207 |>
+  dplyr::filter(padj < 0.05) |>
+  dplyr::filter(abs(log2FoldChange) >= 0.585)
+
+DeltaC_sig_spikein <- result_spikein_DeltaC |>
+  dplyr::filter(padj < 0.05) |>
+  dplyr::filter(abs(log2FoldChange) >= 0.585)
+
+Delta216_sig_spikein <- result_spikein_Delta216 |>
+  dplyr::filter(padj < 0.05) |>
+  dplyr::filter(abs(log2FoldChange) >= 0.585)
+
+# Compare results
+print("=== Spike-in Significant Peaks ===")
+print(paste("Delta207:", nrow(Delta207_sig_spikein)))
+print(paste("DeltaC:", nrow(DeltaC_sig_spikein)))
+print(paste("Delta216:", nrow(Delta216_sig_spikein)))
+
+print(paste("Delta207 gained:", 
+  sum(Delta207_sig_spikein$log2FoldChange > 0)))
+print(paste("Delta207 lost:", 
+  sum(Delta207_sig_spikein$log2FoldChange < 0)))
+```
+
+```{r}
+wt_total_spikein <- result_spikein_Delta207 %>%
+  filter(!is.na(padj)) %>%
+  filter(baseMean > 0) %>%
+  nrow()
+
+print(paste("Total peaks in spike-in analysis:", 
+            wt_total_spikein))
+
+wt_signal_peaks <- result_spikein_Delta207 %>%
+  mutate(WT_mean = rowMeans(
+    countData[, 1:3])) %>%
+  filter(WT_mean > 0) %>%
+  nrow()
+
+print(paste("Peaks with WT signal:", 
+            wt_signal_peaks))
+
+```
+
+
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+
+combined_changes_spikein <- result_spikein_Delta207 %>%
+  full_join(result_spikein_DeltaC[,c(1,6:11)],
+            by = "peakid",
+            suffix = c("_Delta207", "_DeltaC")) %>%
+  full_join(result_spikein_Delta216[,c(1,6:11)],
+            by = "peakid")
+
+colnames(combined_changes_spikein)[12:17] <- c(
+  "baseMean_Delta216",
+  "log2FoldChange_Delta216",
+  "lfcSE_Delta216",
+  "stat_Delta216",
+  "pvalue_Delta216",
+  "padj_Delta216"
+)
+
+combined_changes_spikein <- combined_changes_spikein %>%
+  rename(
+    baseMean_DeltaC = baseMean,
+    log2FoldChange_DeltaC = log2FoldChange,
+    lfcSE_DeltaC = lfcSE,
+    stat_DeltaC = stat,
+    pvalue_DeltaC = pvalue,
+    padj_DeltaC = padj
+  )
+
+Delta207_sig_spikein_matdata <- inner_join(
+  combined_changes_spikein,
+  Delta207_sig_spikein,
+  by = "peakid"
+) %>%
+  dplyr::select(peakid,
+                log2FoldChange_Delta207,
+                log2FoldChange_DeltaC,
+                log2FoldChange_Delta216)
+
+print(dim(Delta207_sig_spikein_matdata))
+
+# Build heatmap
+rnames <- Delta207_sig_spikein_matdata[, 1]
+cnames <- c("∆207", "∆C", "∆216")
+
+mat_data <- data.matrix(
+  Delta207_sig_spikein_matdata[, c(2:4)])
+rownames(mat_data) <- rnames
+colnames(mat_data) <- cnames
+mat_data[is.na(mat_data)] <- 0
+
+my_palette <- colorRamp2(
+  c(-4, -2, 0, 2, 4),
+  c("darkblue", "blue", "white", "red", "darkred")
+)
+
+set.seed(123)
+spikein_heatmap <- ComplexHeatmap::Heatmap(
+  mat_data,
+  col = my_palette,
+  column_title = "Delta207 Significant Peaks",
+  km = 3,
+  row_km_repeats = 25,
+  cluster_columns = FALSE,
+  cluster_row_slices = TRUE,
+  show_row_names = FALSE,
+  show_column_names = TRUE,
+  row_names_gp = gpar(fontsize = 4),
+  row_gap = unit(0, "mm")
+)
+
+spikein_heatmap
+
+# Save
+Cairo::Cairo(
+  file = "/Volumes/One Touch/CUT_RUN/Pdx1_spikein_heatmap.png",
+  bg = "white", type = "png",
+  units = "in", width = 5, height = 8,
+  pointsize = 12, dpi = 300
+)
+spikein_heatmap
+dev.off()
+```
+
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+
+# ===== GET SPIKE-IN NORMALIZED COUNTS =====
+# Use VST from spike-in DESeq2
+vsd_spikein <- varianceStabilizingTransformation(dds_spikein)
+vst_counts_spikein <- assay(vsd_spikein)
+
+# ===== GET SIGNIFICANT PEAK INDICES =====
+sig_peak_indices <- which(
+  rownames(vst_counts_spikein) %in% 
+  rownames(countData)[
+    count$chr %in% Delta207_sig_spikein$chr &
+    count$start %in% Delta207_sig_spikein$start
+  ]
+)
+
+# Better approach - match by coordinates
+count_peakids <- paste(count$chr, 
+                       count$start, 
+                       count$end, sep=".")
+
+sig_indices <- which(count_peakids %in% 
+                     Delta207_sig_spikein$peakid)
+
+print(paste("Significant peaks found:", 
+            length(sig_indices)))
+
+# ===== SUBSET VST COUNTS =====
+vst_sig <- vst_counts_spikein[sig_indices, ]
+
+print(dim(vst_sig))
+
+# ===== SET COLUMN NAMES =====
+colnames(vst_sig) <- c(
+  "WT_1", "WT_2", "WT_3",
+  "∆C_4", "∆C_5", "∆C_6",
+  "∆207_7", "∆207_8", "∆207_9",
+  "∆216_10", "∆216_11", "∆216_12"
+)
+
+# ===== SCALE ROWS FOR VISUALIZATION =====
+# Z-score each row so patterns are visible
+vst_sig_scaled <- t(scale(t(vst_sig)))
+
+# ===== CREATE COLUMN ANNOTATION =====
+column_anno <- HeatmapAnnotation(
+  Condition = factor(
+    c("PDX1 WT","PDX1 WT","PDX1 WT",
+      "∆C","∆C","∆C",
+      "∆207","∆207","∆207",
+      "∆216","∆216","∆216"),
+    levels = c("PDX1 WT","∆C","∆207","∆216")  # ← specify order
+  ),
+  col = list(
+    Condition = c(
+      "PDX1 WT" = "black",
+      "∆C" = "#FF8C00",
+      "∆207" = "#6BAED6",
+      "∆216" = "#31A354"
+    )
+  ),
+  show_annotation_name = FALSE
+)
+
+# ===== COLOR PALETTE =====
+# For z-scored data use symmetric scale
+my_palette <- colorRamp2(
+  c(-2, -1, 0, 1, 2),
+  c("darkblue", "blue", "white", "red", "darkred")
+)
+
+# ===== BUILD HEATMAP =====
+set.seed(123)
+spikein_heatmap_wt <- ComplexHeatmap::Heatmap(
+  vst_sig_scaled,
+  col = my_palette,
+  column_title = "∆207 Significant Peaks",
+  km = 3,
+  row_km_repeats = 25,
+  cluster_columns = FALSE,
+  cluster_row_slices = TRUE,
+  show_row_names = FALSE,
+  show_column_names = TRUE,
+  column_names_gp = gpar(fontsize = 8),
+  row_names_gp = gpar(fontsize = 4),
+  row_gap = unit(0, "mm"),
+  top_annotation = column_anno,
+  heatmap_legend_param = list(
+    title = "Z-score",
+    direction = "vertical"
+  )
+)
+
+spikein_heatmap_wt
+
+Cairo::Cairo(
+  file = "/Volumes/One Touch/CUT_RUN/Pdx1_spikein_heatmap_withWT.png",
+  bg = "white", type = "png",
+  units = "in", width = 7, height = 8,
+  pointsize = 12, dpi = 300
+)
+spikein_heatmap_wt
+dev.off()
+
+print("Heatmap with WT saved!")
+```
+
+
+```{r load_data}
+# Load pre-computed spike-in results
+result_spikein_Delta207 <- read.table(
+  "/Volumes/One Touch/CUT_RUN/Pdx1_spikein_WT_vs_Delta207.txt",
+  sep = "\t", header = TRUE
+)
+
+# Define peakid function
+peakid <- function(df){
+  df %>%
+    mutate(peakid = paste(chr, start, end, sep = ".")) %>%
+    relocate(peakid, .before = "chr")
+}
+
+result_spikein_Delta207 <- peakid(result_spikein_Delta207)
+
+# Lost peaks (sig lost in Delta207)
+Delta207_lost_spikein <- result_spikein_Delta207 %>%
+  dplyr::filter(padj < 0.05) %>%
+  dplyr::filter(log2FoldChange <= -0.585)
+
+# Retained peaks (not significant)
+Delta207_retained_spikein <- result_spikein_Delta207 %>%
+  dplyr::filter(is.na(padj) | padj >= 0.05) %>%
+  dplyr::filter(!is.na(baseMean)) %>%
+  dplyr::filter(baseMean > 20)  # minimum coverage
+
+print(paste("Lost peaks:", nrow(Delta207_lost_spikein)))
+print(paste("Retained peaks:", nrow(Delta207_retained_spikein)))
+```
+
+```{r write_beds}
+# ===== WRITE BED FILES =====
+# Lost peaks
+write.table(
+  Delta207_lost_spikein[,c("chr","start","end")],
+  file = "Delta207_spikein_lost.bed",
+  sep = "\t", row.names = FALSE,
+  col.names = FALSE, quote = FALSE
+)
+
+# Retained peaks
+write.table(
+  Delta207_retained_spikein[,c("chr","start","end")],
+  file = "Delta207_spikein_retained.bed",
+  sep = "\t", row.names = FALSE,
+  col.names = FALSE, quote = FALSE
+)
+
+print("BED files written!")
+file.exists("Delta207_spikein_lost.bed")
+file.exists("Delta207_spikein_retained.bed")
+```
+
+
+```{r}
+# ===== DEEPTOOLS COMPUTE MATRIX =====
+# Using MERGED bigwigs instead of individual replicates
+
+cmd_matrix <- paste(
+  "computeMatrix reference-point",
+  "--referencePoint center",
+  "-b 3000 -a 3000",
+  "-S bigwig_files/spikein_merged/WT_merged_spikein.bw","bigwig_files/spikein_merged/Delta207_merged_spikein.bw","bigwig_files/spikein_merged/Delta216_merged_spikein.bw","bigwig_files/spikein_merged/DeltaC_merged_spikein.bw","bigwig_files/spikein_merged/mCherry_merged_spikein.bw",
+  "-R Delta207_spikein_lost.bed",
+  "Delta207_spikein_retained.bed",
+  "--skipZeros --binSize 10 -p max",
+  "-o Delta207_lost_vs_retained_merged_matrix.gz"
+)
+
+system(cmd_matrix)
+print("Matrix computed!")
+
+# For the profile plot
+cmd_profile <- paste(
+  "plotProfile",
+  "--matrixFile Delta207_lost_vs_retained_merged_matrix.gz",
+  "--outFileName Delta207_lost_vs_retained_merged_profile.png",
+  "--plotHeight 10 --plotWidth 12",
+  "--plotType lines",
+  "--refPointLabel 'Binding Site'",  
+  "--perGroup",
+  "--yMax 175",
+  "--yAxisLabel 'Mean Coverage'",
+  "--regionsLabel 'Lost Peaks' 'Retained Peaks'",
+  "--samplesLabel WT 'Pdx1∆207' 'Pdx1∆216' 'Pdx1∆C' mCherry-EV",
+  "--colors black '#6BAED6' green  orange red",
+  "--outFileNameData Delta207_lost_vs_retained_merged_profile.txt",
+  "--dpi 300"
+)
+
+system(cmd_profile)
+system("open Delta207_lost_vs_retained_merged_profile.png")
+
+```
+
+```{r}
+bigwigs <- paste(
+  "bigwig_files/spikein_merged/WT_merged_spikein.bw","bigwig_files/spikein_merged/Delta207_merged_spikein.bw","bigwig_files/spikein_merged/Delta216_merged_spikein.bw","bigwig_files/spikein_merged/DeltaC_merged_spikein.bw","bigwig_files/spikein_merged/mCherry_merged_spikein.bw"
+)
+
+groups <- list(
+  list(name = "lost", bed = "Delta207_spikein_lost.bed", label = "Lost Peaks"),
+  list(name = "retained", bed = "Delta207_spikein_retained.bed", label = "Retained Peaks")
+)
+
+for (group in groups) {
+  
+  message(paste("Processing:", group$label))
+  
+  matrix_out <- sprintf("Delta207_%s_matrix.gz", group$name)
+  plot_out <- sprintf("Delta207_%s_profile.png", group$name)
+  data_out <- sprintf("Delta207_%s_profile_data.txt", group$name)
+  
+  cmd_matrix <- paste(
+    "computeMatrix reference-point",
+    "--referencePoint center",
+    "-b 3000 -a 3000",
+    "-S", bigwigs,
+    "-R", group$bed,
+    "--skipZeros --binSize 10 -p max",
+    "-o", matrix_out
+  )
+  system(cmd_matrix)
+  
+  cmd_profile <- paste(
+    "plotProfile",
+    "--matrixFile", matrix_out,
+    "--outFileName", plot_out,
+    "--plotHeight 10 --plotWidth 12",
+    "--plotType lines",
+    "--refPointLabel ' Pdx1 Binding Site'",  
+    "--perGroup",
+    "--yMin 0",              
+    "--yMax 200",       
+    "--yAxisLabel 'Mean Coverage'",
+    sprintf("--regionsLabel '%s'", group$label),
+    "--samplesLabel WT 'Pdx1∆207' 'Pdx1∆216' 'Pdx1∆C' mCherry-EV",
+    "--colors black '#6BAED6' green orange red",
+    "--dpi 300"
+  )
+  system(cmd_profile)
+}
+```
+
+```{r}
+library(Cairo)
+library(magick)
+library(grid)
+
+cmd_heatmap <- paste(
+  "plotHeatmap",
+  "--matrixFile Delta207_lost_vs_retained_merged_matrix.gz",
+  "--colorList white,black white,black white,black white,black white,black",
+  "--regionsLabel 'Lost Peaks' 'Retained Peaks'",
+  "--samplesLabel '' '' '' '' ''", 
+  "--refPointLabel 'Binding Site'",
+  "--legendLocation upper-right",
+  "--heatmapHeight 15",
+  "--heatmapWidth 5",
+  "--boxAroundHeatmaps yes",
+  "--labelRotation 0",
+  "--yAxisLabel 'Mean Coverage'",
+  "--outFileName Delta207_temp.png",
+  "--dpi 300"
+)
+
+system(cmd_heatmap)
+
+img <- image_read("Delta207_temp.png")
+info_orig <- image_info(img)
+
+img_bordered <- image_border(img, "white", "0x100")
+crop_geo <- paste0(info_orig$width, "x", info_orig$height + 100, "+0+0")
+img_final_canvas <- image_crop(img_bordered, crop_geo)
+info_final <- image_info(img_final_canvas)
+
+Cairo::Cairo(
+  file = "Delta207_Final_Heatmap_Manual.png", 
+  type = "png", bg = "white",
+  width = info_final$width, height = info_final$height, dpi = 300
+)
+
+grid.raster(img_final_canvas)
+
+grid.text("WT", x = unit(0.145, "npc"), y = unit(0.96, "npc"), 
+          gp = gpar(col = "black", fontsize = 12, fontface = "bold"))
+
+grid.text("Pdx1Δ207", x = unit(0.334, "npc"), y = unit(0.96, "npc"), 
+          gp = gpar(col = "deepskyblue", fontsize = 12, fontface = "bold"))
+
+
+grid.text("Pdx1Δ216", x = unit(0.522, "npc"), y = unit(0.96, "npc"), 
+          gp = gpar(col = "darkgreen", fontsize = 12, fontface = "bold"))
+
+
+grid.text("Pdx1ΔC", x = unit(0.713, "npc"), y = unit(0.96, "npc"), 
+          gp = gpar(col = "orange", fontsize = 12, fontface = "bold"))
+
+
+grid.text("mCherry-EV", x = unit(0.905, "npc"), y = unit(0.96, "npc"), 
+          gp = gpar(col = "red", fontsize = 12, fontface = "bold"))
+grid.text("Signal Intensity", 
+          x = unit(0.5, "npc"), 
+          y = unit(0.08, "npc"),
+          gp = gpar(col = "black", fontsize = 10, fontface = "bold"))
+
+dev.off()
+```
+
+
+```{r}
+library(ggplot2)
+library(ggrepel)
+library(dplyr)
+
+volcano_data <- as.data.frame(result_spikein_Delta207) %>%
+  rownames_to_column("peak_id") %>%
+  filter(!is.na(padj)) %>%
+  mutate(
+    significance = case_when(
+      padj < 0.05 & log2FoldChange <= -0.585 ~ "Lost",
+      padj < 0.05 & log2FoldChange >= 0.585  ~ "Gained",
+      TRUE ~ "Not Significant"
+    ),
+    neg_log10_padj = -log10(padj)
+  )
+
+anno_slim <- Delta207_lost_spikein_anno_df %>%
+  dplyr::select(peak_id = peakid, SYMBOL) %>%
+  distinct(peak_id, .keep_all = TRUE)
+
+volcano_data <- volcano_data %>%
+  left_join(anno_slim, by = "peak_id")
+
+top_lost <- volcano_data %>%
+  filter(significance == "Lost") %>%
+  arrange(padj) %>%
+  head(20)
+
+volcano_plot <- ggplot(
+  volcano_data,
+  aes(x = log2FoldChange,
+      y = neg_log10_padj,
+      color = significance)) +
+  geom_point(size = 1.5, alpha = 0.6) +
+  geom_text_repel(
+    data = top_lost,
+    aes(label = SYMBOL),
+    size = 3,
+    fontface = "italic",
+    max.overlaps = 20,
+    box.padding = 0.5
+  ) +
+  scale_color_manual(values = c(
+    "Lost" = "#D73027",
+    "Gained" = "#4575B4",
+    "Not Significant" = "grey70"
+  )) +
+  geom_vline(xintercept = c(-0.585, 0.585),
+             linetype = "dashed",
+             color = "grey50") +
+  geom_hline(yintercept = -log10(0.05),
+             linetype = "dashed",
+             color = "grey50") +
+  theme_classic() +
+  labs(
+    title = "Pdx1 Delta207 vs WT",
+    x = "Log2 Fold Change (Delta207 vs WT)",
+    y = "-log10(adjusted p-value)",
+    color = ""
+  ) +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    axis.text = element_text(size = 11),
+    axis.title = element_text(size = 12),
+    legend.text = element_text(size = 11)
+  )
+
+volcano_plot
+```
+
+```{r}
+volcano_data <- Delta207_lost_spikein_anno_df %>%
+  filter(!is.na(padj)) %>%
+  mutate(
+    significance = case_when(
+      padj < 0.05 & log2FoldChange <= -0.585 ~ "Lost",
+      padj < 0.05 & log2FoldChange >= 0.585  ~ "Gained",
+      TRUE ~ "Not Significant"
+    ),
+    neg_log10_padj = -log10(padj)
+  )
+
+head(volcano_data %>% dplyr::select(SYMBOL, log2FoldChange, padj, significance))
+
+```
+
+```{r}
+volcano_data <- as.data.frame(result_spikein_Delta207) %>%
+  filter(!is.na(padj)) %>%
+  mutate(
+    significance = case_when(
+      padj < 0.05 & log2FoldChange <= -0.585 ~ "Lost",
+      padj < 0.05 & log2FoldChange >= 0.585  ~ "Gained",
+      TRUE ~ "Retained"
+    ),
+    neg_log10_padj = -log10(padj)
+  )
+
+genes_to_label <- c(
+  "Foxa2", "Isl1",
+  "Mafa", "Neurod1",
+  "Pax4"
+)
+
+label_data <- Delta207_lost_spikein_anno_df %>%
+  filter(SYMBOL %in% genes_to_label) %>%
+  filter(!is.na(padj)) %>%
+  mutate(neg_log10_padj = -log10(padj)) %>%
+  distinct(SYMBOL, .keep_all = TRUE)
+
+print(label_data %>% dplyr::select(SYMBOL, log2FoldChange, padj))
+
+n_lost <- sum(volcano_data$significance == "Lost")
+n_gained <- sum(volcano_data$significance == "Gained")
+n_ns <- sum(volcano_data$significance == "Retained")
+
+print(paste("Lost:", n_lost))
+print(paste("Gained:", n_gained))
+print(paste("Retained:", n_ns))
+
+```
+```{r}
+volcano_plot <- ggplot(
+  volcano_data,
+  aes(x = log2FoldChange,
+      y = neg_log10_padj,
+      color = significance)) +
+  geom_point(size = 1.5, alpha = 0.6) +
+  geom_text_repel(
+    data = label_data,
+    aes(label = SYMBOL),
+    size = 8,
+    nudge_y = 0.5,     
+    direction = "both", 
+    fontface = "bold",
+    max.overlaps = 30,
+    box.padding = 0.5,
+    color = "black",
+    min.segment.length = 0,
+    segment.color = "black"
+  ) +
+  scale_color_manual(values = c(
+    "Lost" = "#D73027",
+    "Gained" = "#4575B4",
+    "Retained" = "grey70"
+  )) +
+  theme_classic() +
+  geom_vline(xintercept = c(-0.585, 0.585),
+           linetype = "dashed",      
+           linewidth = 0.8,      
+           color = "black") +
+  geom_hline(yintercept = -log10(0.05),
+           linetype = "dashed",      
+           linewidth = 0.8,
+           color = "black") +
+  annotate("label", x = -3, y = 6.5,
+           label = "Lost: 11,933",
+           color = "#D73027",
+           fontface = "bold",
+           hjust = 0, size = 7) +
+  annotate("label", x = .75, y = 3.75,
+           label = "Gained: 6",
+           fill = "white", color = "#4575B4",
+           fontface = "bold",
+           hjust = 0, size = 7) +
+  annotate("label", x = -3.75, y = 0.5,
+           label = "Retained: 27,518",
+           fill = "white", color = "grey50",
+           fontface = "bold",
+           hjust = 0, size = 7) +
+  annotate("label", x = 0.5, y = 6.5, 
+           label = "Total Pdx1 WT peaks: 39,457",
+           fill = "white", color = "black",
+           fontface = "bold", size = 7,
+           label.size = 0.5) +
+  labs(
+    title = "Volcano Plot of Pdx1∆207 vs WT",
+    x = "Log2 Fold Change",
+    y = "-log10(adjusted p-value)",
+    color = ""
+  ) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+    axis.text = element_text(size = 20, face = "bold"),
+    axis.title = element_text(size = 20, face = "bold"),
+    legend.text = element_text(size = 20, face = "bold")
+  )
+
+volcano_plot
+
+
+Cairo::Cairo(
+  file = "/Volumes/One Touch/CUT_RUN/Delta207_volcano.png",
+  bg = "white", type = "png",
+  units = "in",
+  width = 10,
+  height = 10,
+  pointsize = 12, dpi = 300
+)
+print(volcano_plot)
+dev.off()
+
+```
+```{r}
+# Check gained peaks
+Delta207_gained_spikein_anno_df %>%
+  dplyr::select(SYMBOL, GENENAME, log2FoldChange, padj) %>%
+  arrange(padj) %>%
+  print()
+```
+
+
+```{r chipseeker_annotation}
+
+library(ChIPseeker)
+library(txdbmaker)
+library(org.Mm.eg.db)
+library(GenomicRanges)
+
+if(file.exists("/Volumes/One Touch/CUT_RUN/mm39_refGene_txdb.sqlite")){
+  txdb <- loadDb(
+    "/Volumes/One Touch/CUT_RUN/mm39_refGene_txdb.sqlite"
+  )
+} else {
+  txdb <- txdbmaker::makeTxDbFromUCSC(
+    genome = "mm39",
+    tablename = "refGene"
+  )
+  saveDb(txdb,
+         file = "/Volumes/One Touch/CUT_RUN/mm39_refGene_txdb.sqlite")
+}
+
+print(paste("Lost peaks:", nrow(Delta207_lost_spikein)))
+print(paste("Retained peaks:", nrow(Delta207_retained_spikein)))
+
+lost_gr <- makeGRangesFromDataFrame(
+  Delta207_lost_spikein,
+  seqnames.field = "chr",
+  start.field = "start",
+  end.field = "end",
+  keep.extra.columns = TRUE
+)
+
+retained_gr <- makeGRangesFromDataFrame(
+  Delta207_retained_spikein,
+  seqnames.field = "chr",
+  start.field = "start",
+  end.field = "end",
+  keep.extra.columns = TRUE
+)
+
+lost_anno <- annotatePeak(
+  lost_gr,
+  tssRegion = c(-3000, 3000),
+  TxDb = txdb,
+  annoDb = "org.Mm.eg.db"
+)
+
+retained_anno <- annotatePeak(
+  retained_gr,
+  tssRegion = c(-3000, 3000),
+  TxDb = txdb,
+  annoDb = "org.Mm.eg.db"
+)
+
+lost_anno_df <- as.data.frame(lost_anno)
+retained_anno_df <- as.data.frame(retained_anno)
+
+print(paste("Lost peaks annotated:", nrow(lost_anno_df)))
+print(paste("Retained peaks annotated:", nrow(retained_anno_df)))
+```
+```{r}
+tss_plot <- plotDistToTSS(
+  anno_list,
+  title = "Distance to TSS"
+) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+    # Increase font size for y-axis tick labels
+    axis.text.y = element_text(size = 18, face = "bold"),
+    axis.text.x = element_text(size = 16, face = "bold"),
+    axis.title.x = element_text(size = 18, face = "bold")
+  ) +
+  # Change the y-axis name from "Feature" to "Distance"
+  ylab("Distance (kb)") + labs(fill = "Distance")
+
+Cairo::Cairo(
+  file = "/Volumes/One Touch/CUT_RUN/Delta207_lost_vs_retained_TSS.png",
+  bg = "white", type = "png",
+  units = "in", width = 10, height = 6,
+  pointsize = 12, dpi = 300
+)
+print(tss_plot)
+dev.off()
+
+Cairo::Cairo(
+  file = "/Volumes/One Touch/CUT_RUN/Delta207_lost_annopie.png",
+  bg = "white", type = "png",
+  units = "in", width = 6, height = 6,
+  pointsize = 12, dpi = 300
+)
+plotAnnoPie(lost_anno, 
+            main = "Pdx1∆207 Lost Peaks")
+dev.off()
+
+Cairo::Cairo(
+  file = "/Volumes/One Touch/CUT_RUN/Delta207_retained_annopie.png",
+  bg = "white", type = "png",
+  units = "in", width = 6, height = 6,
+  pointsize = 12, dpi = 300
+)
+plotAnnoPie(retained_anno,
+            main = "Pdx1∆207 Retained Peaks")
+dev.off()
+
+anno_list <- list(
+  "Lost Peaks" = lost_anno,
+  "Retained Peaks" = retained_anno
+)
+
+anno_bar <- plotAnnoBar(anno_list) +
+  ggtitle("Peak Distribution") +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0.5), 
+    axis.text.y = element_text(size = 18, face = "bold"),
+    axis.text.x = element_text(size = 16, face = "bold"),
+    axis.title.x = element_text(size = 18, face = "bold"),
+    legend.text = element_text(size = 9),
+    legend.title = element_text(size = 12, face = "bold") 
+  ) + 
+  labs(fill = "Genomic Region") # Moved outside of theme()
+
+Cairo::Cairo(
+  file = "/Volumes/One Touch/CUT_RUN/Delta207_lost_vs_retained_annobar.png",
+  bg = "white", type = "png",
+  units = "in", width = 10, height = 6,
+  pointsize = 12, dpi = 300
+)
+print(anno_bar)
+dev.off()
+
+
+write.table(
+  lost_anno_df,
+  file = "/Volumes/One Touch/CUT_RUN/Delta207_spikein_lost_annotated.txt",
+  sep = "\t", row.names = FALSE, quote = FALSE
+)
+
+write.table(
+  retained_anno_df,
+  file = "/Volumes/One Touch/CUT_RUN/Delta207_spikein_retained_annotated.txt",
+  sep = "\t", row.names = FALSE, quote = FALSE
+)
+
+print("=== Lost Peak Annotation Summary ===")
+print(table(lost_anno_df$annotation))
+
+print("=== Retained Peak Annotation Summary ===")
+print(table(retained_anno_df$annotation))
+
+system("open '/Volumes/One Touch/CUT_RUN/Delta207_lost_annopie.png'")
+system("open '/Volumes/One Touch/CUT_RUN/Delta207_retained_annopie.png'")
+system("open '/Volumes/One Touch/CUT_RUN/Delta207_lost_vs_retained_annobar.png'")
+system("open '/Volumes/One Touch/CUT_RUN/Delta207_lost_vs_retained_TSS.png'")
+
+print("ChIPseeker annotation complete!")
+```
+
+
+```{r}
+print("=== Lost Peak Distribution ===")
+lost_table <- table(lost_anno_df$annotation)
+print(round(prop.table(lost_table) * 100, 1))
+
+print("=== Retained Peak Distribution ===")
+retained_table <- table(retained_anno_df$annotation)
+print(round(prop.table(retained_table) * 100, 1))
+
+# Chi-square test
+chisq.test(rbind(lost_table, retained_table))
+
+
+chisq_result <- chisq.test(
+  rbind(lost_table, retained_table)
+)
+
+chisq_summary <- data.frame(
+  test = "Chi-squared",
+  X_squared = round(chisq_result$statistic, 1),
+  df = chisq_result$parameter,
+  p_value = chisq_result$p.value,
+  comparison = "Lost vs Retained Peak Distribution"
+)
+
+write.table(
+  chisq_summary,
+  file = "/Volumes/One Touch/CUT_RUN/Delta207_lost_vs_retained_chisq.txt",
+  sep = "\t", row.names = FALSE, quote = FALSE
+)
+
+print(format(chisq_result$p.value, 
+             scientific = TRUE))
+print(chisq_summary)
+```
+
+
+```{r homer_motifs}
+
+system("mkdir -p homer_output/lost_known")
+system("mkdir -p homer_output/retained_known")
+system("mkdir -p homer_output/lost_denovo")
+system("mkdir -p homer_output/retained_denovo")
+
+cmd_known_lost <- paste(
+  '"/Volumes/One Touch/homer/bin/findMotifsGenome.pl"',
+  "Delta207_spikein_lost.bed",
+  "mm39",
+  "homer_output/lost_known",
+  "-size given -p 4 -nomotif"
+)
+cmd_known_retained <- paste(
+  '"/Volumes/One Touch/homer/bin/findMotifsGenome.pl"',
+  "Delta207_spikein_retained.bed",
+  "mm39",
+  "homer_output/retained_known",
+  "-size given -p 4 -nomotif"
+)
+
+cmd_denovo_lost <- paste(
+  '"/Volumes/One Touch/homer/bin/findMotifsGenome.pl"',
+  "Delta207_spikein_lost.bed",
+  "mm39",
+  "homer_output/lost_denovo",
+  "-size given -p 4"
+)
+
+cmd_denovo_retained <- paste(
+  '"/Volumes/One Touch/homer/bin/findMotifsGenome.pl"',
+  "Delta207_spikein_retained.bed",
+  "mm39",
+  "homer_output/retained_denovo",
+  "-size given -p 4"
+)
+
+print("Running HOMER on lost peaks...")
+system(cmd_known_lost)
+system(cmd_denovo_lost)
+
+print("Running HOMER on retained peaks...")
+system(cmd_known_retained)
+system(cmd_denovo_retained)
+
+print("HOMER analysis complete!")
+```
+
+```{r homer_results}
+known_lost <- read.delim(
+  "homer_output/lost_known/knownResults.txt",
+  header = TRUE, fill = TRUE, quote = ""
+)
+
+known_retained <- read.delim(
+  "homer_output/retained_known/knownResults.txt",
+  header = TRUE, fill = TRUE, quote = ""
+)
+
+pdx1_lost <- known_lost %>%
+  dplyr::filter(grepl("Pdx1", 
+                       colnames(known_lost)[1],
+                       ignore.case = TRUE))
+
+print("Pdx1 in lost peaks:")
+known_lost[grep("Pdx1", known_lost[,1], 
+                ignore.case = TRUE),
+           c(1,3,5,7)]
+
+print("Pdx1 in retained peaks:")
+known_retained[grep("Pdx1", known_retained[,1],
+                    ignore.case = TRUE),
+               c(1,3,5,7)]
+```
+
+```{r}
+assign_tf_family <- function(motif_name){
+  case_when(
+    grepl("Homeobox|Homeodomain|HOX|PDX|NKX|
+           LHX|GSX|EMX|ISL|DLX|PBX|MEIS|
+           ATOH|PROX|ARX|DBX|EN1|EN2|VAX|
+           OTX|CRX|RAX",
+          motif_name,
+          ignore.case = TRUE) ~ "Homeodomain",
+    grepl("bHLH|ASCL|NEUROD|NGN|TCF|
+           MYOD|MYF|E-BOX",
+          motif_name,
+          ignore.case = TRUE) ~ "bHLH",
+    grepl("ETS|ERG|ETV|FLI|ELK|PU.1|GABPA",
+          motif_name,
+          ignore.case = TRUE) ~ "ETS",
+    grepl("Forkhead|FOXA|FOXO|FOXP|FOXM",
+          motif_name,
+          ignore.case = TRUE) ~ "Forkhead",
+    grepl("Nuclear Receptor|NR|RXR|RAR|
+           PPAR|ERR|HNF4",
+          motif_name,
+          ignore.case = TRUE) ~ "Nuclear Receptor",
+    grepl("KLF|SP1|SP2|SP3|GC-box",
+          motif_name,
+          ignore.case = TRUE) ~ "KLF/SP",
+    grepl("GATA|TAL|SCL",
+          motif_name,
+          ignore.case = TRUE) ~ "GATA",
+    grepl("SOX|SRY|HMG",
+          motif_name,
+          ignore.case = TRUE) ~ "SOX/HMG",
+    grepl("RFX|RFXANK",
+          motif_name,
+          ignore.case = TRUE) ~ "RFX",
+    grepl("TEAD|YAP|TAZ",
+          motif_name,
+          ignore.case = TRUE) ~ "TEAD",
+    grepl("NFI|NFIA|NFIB|NFIX",
+          motif_name,
+          ignore.case = TRUE) ~ "NFI",
+    TRUE ~ "Other"
+  )
+}
+
+known_lost_family <- known_lost %>%
+  mutate(
+    TF_family = assign_tf_family(known_lost[,1]),
+    neg_log10_p = -log10(as.numeric(P.value)),
+    pct_targets = as.numeric(
+      gsub("%","",
+           X..of.Target.Sequences.with.Motif))
+  )
+
+known_retained_family <- known_retained %>%
+  mutate(
+    TF_family = assign_tf_family(known_retained[,1]),
+    neg_log10_p = -log10(as.numeric(P.value)),
+    pct_targets = as.numeric(
+      gsub("%","",
+           X..of.Target.Sequences.with.Motif))
+  )
+
+family_summary_lost <- known_lost_family %>%
+  group_by(TF_family) %>%
+  summarise(
+    best_neg_log10_p = max(neg_log10_p,
+                           na.rm = TRUE),
+    n_motifs = n(),
+    mean_pct_targets = mean(pct_targets,
+                            na.rm = TRUE),
+    best_motif = known_lost[
+      which.max(neg_log10_p), 1][1]
+  ) %>%
+  arrange(desc(best_neg_log10_p)) %>%
+  filter(TF_family != "Other")
+
+family_summary_retained <- known_retained_family %>%
+  group_by(TF_family) %>%
+  summarise(
+    best_neg_log10_p = max(neg_log10_p,
+                           na.rm = TRUE),
+    n_motifs = n(),
+    mean_pct_targets = mean(pct_targets,
+                            na.rm = TRUE),
+    best_motif = known_retained[
+      which.max(neg_log10_p), 1][1]
+  ) %>%
+  arrange(desc(best_neg_log10_p)) %>%
+  filter(TF_family != "Other")
+
+print("Updated Best Motifs Lost")
+for(fam in c("Homeodomain","CTCF","Forkhead")){
+  get_best_motif(known_lost_family,
+                 fam, NULL)
+}
+
+print("Updated Best Motifs Retained")
+for(fam in c("KLF/SP","ETS","Homeodomain")){
+  get_best_motif(known_retained_family,
+                 fam, NULL)
+}
+```
+
+```{r}
+
+max_finite_lost <- max(
+  family_summary_lost$best_neg_log10_p[
+    is.finite(family_summary_lost$best_neg_log10_p)
+  ]
+)
+
+max_finite_retained <- max(
+  family_summary_retained$best_neg_log10_p[
+    is.finite(family_summary_retained$best_neg_log10_p)
+  ]
+)
+
+global_max <- max(max_finite_lost, 
+                  max_finite_retained) * 1.1
+
+family_summary_lost <- family_summary_lost %>%
+  mutate(best_neg_log10_p_capped = ifelse(
+    is.infinite(best_neg_log10_p),
+    global_max,
+    best_neg_log10_p
+  ))
+
+family_summary_retained <- family_summary_retained %>%
+  mutate(best_neg_log10_p_capped = ifelse(
+    is.infinite(best_neg_log10_p),
+    global_max,
+    best_neg_log10_p
+  ))
+
+family_summary_lost <- family_summary_lost %>%
+  mutate(is_capped = is.infinite(best_neg_log10_p))
+
+family_summary_retained <- family_summary_retained %>%
+  mutate(is_capped = is.infinite(best_neg_log10_p))
+
+print("Fixed lost peaks:")
+print(family_summary_lost %>%
+  dplyr::select(TF_family, 
+                best_neg_log10_p_capped,
+                is_capped))
+
+print("Fixed retained peaks:")
+print(family_summary_retained %>%
+  dplyr::select(TF_family,
+                best_neg_log10_p_capped,
+                is_capped))
+```
+
+```{r}
+sig_threshold <- -log10(0.05)
+
+
+lost_family_plot <- ggplot(
+  family_summary_lost %>% head(8),
+  aes(x = best_neg_log10_p_capped,
+      y = reorder(TF_family,
+                  best_neg_log10_p_capped),
+      fill = best_neg_log10_p_capped)) +
+  geom_bar(stat = "identity") +
+
+  geom_text(
+    data = family_summary_lost %>%
+      filter(is_capped == TRUE),
+    aes(x = best_neg_log10_p_capped + 5,
+        label = "*"),
+    color = "black",
+    size = 6,
+    fontface = "bold"
+  ) +
+  geom_vline(
+    xintercept = sig_threshold,
+    linetype = "dashed",
+    color = "red",
+    linewidth = 0.8
+  ) +
+  annotate("text",
+           x = sig_threshold + 3,
+           y = 0.7,
+           label = "p = 0.05",
+           color = "red",
+           size = 3.5) +
+  scale_fill_gradient(
+    low = "#C6DBEF",
+    high = "#2166AC"
+  ) +
+  theme_classic() +
+  labs(
+    title = "Lost Peaks",
+    x = "-log10(p-value)",
+    y = "TF Family",
+    caption = "* p-value below R detection limit"
+  ) +
+  theme(
+    plot.title = element_text(
+      size = 20, face = "bold",
+      hjust = 0.5),
+    axis.text.y = element_text(size = 15), 
+    axis.title.x = element_text(size = 20),
+    axis.title.y = element_text(size = 20),
+    axis.text.x = element_text(size = 15),
+    plot.caption = element_text(
+      size = 12, color = "grey50"),
+    legend.position = "none"
+  )
+
+
+retained_family_plot <- ggplot(
+  family_summary_retained %>% head(8),
+  aes(x = best_neg_log10_p_capped,
+      y = reorder(TF_family,
+                  best_neg_log10_p_capped),
+      fill = best_neg_log10_p_capped)) +
+  geom_bar(stat = "identity") +
+
+  geom_text(
+    data = family_summary_retained %>%
+      filter(is_capped == TRUE),
+    aes(x = best_neg_log10_p_capped + 5,
+        label = "*"),
+    color = "black",
+    size = 6,
+    fontface = "bold"
+  ) +
+  geom_vline(
+    xintercept = sig_threshold,
+    linetype = "dashed",
+    color = "red",
+    linewidth = 0.8
+  ) +
+  annotate("text",
+           x = sig_threshold + 3,
+           y = 0.7,
+           label = "p = 0.05",
+           color = "red",
+           size = 3.5) +
+  scale_fill_gradient(
+    low = "#C6DBEF",
+    high = "#2166AC"
+  ) +
+  theme_classic() +
+  labs(
+    title = "Retained Peaks",
+    x = "-log10(p-value)",
+    y = "",
+    caption = "* p-value below R detection limit"
+  ) +
+  theme(
+    plot.title = element_text(
+      size = 20, face = "bold",
+      hjust = 0.5),
+    axis.text.y = element_text(size = 15),
+    axis.title.x = element_text(size = 20),
+    axis.text.x = element_text(size = 15),
+    plot.caption = element_text(
+      size = 12, color = "grey50"),
+    legend.position = "none"
+  )
+
+combined_family_plot <- plot_grid(
+  lost_family_plot,
+  retained_family_plot,
+  ncol = 2,
+  align = "h"
+)
+
+combined_family_plot
+
+Cairo::Cairo(
+  file = "/Volumes/One Touch/CUT_RUN/Delta207_TF_family_comparison_v3.png",
+  bg = "white", type = "png",
+  units = "in", width = 12, height = 6,
+  pointsize = 12, dpi = 300
+)
+print(combined_family_plot)
+dev.off()
+```
+```{r}
+library(ggseqlogo)
+library(cowplot)
+
+
+get_best_motif <- function(known_results_df,
+                           family_name,
+                           motifs_raw){
+  # Find best motif for this family
+  family_rows <- known_results_df %>%
+    filter(TF_family == family_name) %>%
+    arrange(as.numeric(P.value))
+  
+  if(nrow(family_rows) == 0) return(NULL)
+  
+
+  best_motif_name <- family_rows[1, 1]
+  print(paste("Best motif for", 
+              family_name, ":", 
+              best_motif_name))
+  
+  return(best_motif_name)
+}
+
+
+
+top_lost_families <- c("Homeodomain", 
+                        "bHLH", 
+                        "Forkhead")
+
+ 
+top_retained_families <- c("KLF/SP",
+                            "ETS",
+                            "Homeodomain")
+
+
+print("Best motifs for Lost Peaks")
+for(fam in top_lost_families){
+  get_best_motif(known_lost_family, 
+                 fam, motifs_raw)
+}
+
+print("Best motifs for Retained Peaks")
+for(fam in top_retained_families){
+  get_best_motif(known_retained_family,
+                 fam, motifs_raw)
+}
+```
+
+```{r}
+library(ggseqlogo)
+library(cowplot)
+library(ggplot2)
+
+parse_homer_motif <- function(lines, motif_name){
+  motif_idx <- grep(motif_name, lines, 
+                    ignore.case = TRUE)
+  
+  if(length(motif_idx) == 0){
+    print(paste("Motif not found:", motif_name))
+    return(NULL)
+  }
+  
+  start <- motif_idx[1] + 1
+  
+  next_headers <- grep("^>", lines)
+  next_header <- next_headers[
+    next_headers > motif_idx[1]][1]
+  
+  if(is.na(next_header)){
+    end <- length(lines)
+  } else {
+    end <- next_header - 1
+  }
+  
+
+  matrix_lines <- lines[start:end]
+  matrix_lines <- matrix_lines[
+    !grepl("^>|^$", matrix_lines)]
+  
+
+  pwm <- do.call(rbind, lapply(
+    matrix_lines, function(x){
+      as.numeric(strsplit(trimws(x), 
+                          "\t|\\s+")[[1]][1:4])
+    }))
+  
+
+  t(pwm)
+}
+
+
+lost_motifs_raw <- readLines(
+  "homer_output/lost_known/knownResults.txt"
+)
+
+
+list.files("homer_output/lost_known/")
+list.files("homer_output/retained_known/")
+```
+```{r}
+homer_motifs_path <- "/Volumes/One Touch/homer/data/knownTFs/motifs/"
+
+
+# 1. Nkx6.1 (Homeodomain - pancreas specific)
+nkx61_motif_file <- paste0(homer_motifs_path, 
+                             "nkx6.1.motif")
+
+# 2. Pdx1 
+Pdx1_motif_file <- paste0(homer_motifs_path, 
+                             "Pdx1.motif")
+
+# 3. Foxa2 (Forkhead - Pdx1 cofactor)
+foxa2_motif_file <- paste0(homer_motifs_path,
+                             "foxa2.motif")
+
+#1 Sp1
+sp1_motif_file <- paste0(homer_motifs_path, 
+                             "Sp1.motif")
+
+
+# 2. Elk4 
+elk4_motif_file <- paste0(homer_motifs_path, 
+                             "Elk4.motif")
+
+# 3. Pdx1 
+Pdx1r_motif_file <- paste0(homer_motifs_path, 
+                             "Pdx1.motif")
+
+
+```
+
+
+```{r}
+
+nkx61_pwm <- parse_homer_motif_file(nkx61_motif_file)
+pdx1_pwm  <- parse_homer_motif_file(Pdx1_motif_file)
+foxa2_pwm <- parse_homer_motif_file(foxa2_motif_file)
+
+
+save_individual_logo <- function(pwm, title, rank, target_pct, log_p, filename){
+  if(is.null(pwm)) return(NULL)
+  
+  stat_subtitle <- paste0("Rank: ", rank, " | ", target_pct, "% | logP: ", log_p)
+  
+  p <- ggseqlogo(pwm, method = "probability", col_scheme = dna_colors) +
+    theme_logo() +
+    theme(
+      plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 11, hjust = 0.5, color = "grey30"), 
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      axis.title.x = element_blank(),
+      plot.margin = margin(10, 10, 10, 10)
+    ) +
+    labs(title = title, subtitle = stat_subtitle)
+  
+  Cairo::Cairo(
+    file = filename,
+    bg = "white", type = "png",
+    units = "in", width = 6, height = 2.8, # Slightly shorter height to fit the smaller font
+    dpi = 300
+  )
+  print(p)
+  dev.off()
+}
+```
+
+```{r}
+save_individual_logo(pdx1_pwm, "Pdx1", 48, 25.32, "-2.498e+02", 
+                     "/Volumes/One Touch/CUT_RUN/Logo_1_Pdx1.png")
+save_individual_logo(nkx61_pwm, "Nkx6.1", 2, 75.1, "-2.151e+03", 
+                     "/Volumes/One Touch/CUT_RUN/Logo_2_Nkx61.png")
+save_individual_logo(foxa2_pwm, "Foxa2", 27, 26.77, "-5.891e+02", 
+                     "/Volumes/One Touch/CUT_RUN/Logo_3_Foxa2.png")
+```
+
+```{r}
+sp1_pwm <- parse_homer_motif_file(sp1_motif_file)
+pdx1r_pwm  <- parse_homer_motif_file(Pdx1r_motif_file) 
+elk4_pwm <- parse_homer_motif_file(elk4_motif_file)
+
+save_individual_logo <- function(pwm, title, rank, target_pct, log_p, filename){
+  if(is.null(pwm)) return(NULL)
+  stat_subtitle <- paste0("Rank: ", rank, " | ", target_pct, "% | logP: ", log_p)
+  
+  p <- ggseqlogo(pwm, method = "probability", col_scheme = dna_colors) +
+    theme_logo() +
+    theme(
+      plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 11, hjust = 0.5, color = "grey30"), 
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      axis.title.x = element_blank(),
+      plot.margin = margin(10, 10, 10, 10)
+    ) +
+    labs(title = title, subtitle = stat_subtitle)
+
+  Cairo::Cairo(
+    file = filename,
+    bg = "white", type = "png",
+    units = "in", width = 6, height = 2.8,
+    dpi = 300
+  )
+  print(p)
+  dev.off()
+}
+
+save_individual_logo(pdx1r_pwm, "Pdx1", 78, 19.91, "-3.007e+02", 
+                     "/Volumes/One Touch/CUT_RUN/Logo_1_Pdx1retained.png")
+save_individual_logo(sp1_pwm, "Sp1", 15, 17.74, "-1.287e+03", 
+                     "/Volumes/One Touch/CUT_RUN/Logo_2_Sp1.png")
+save_individual_logo(elk4_pwm, "Elk4", 29, 19.18, "-7.499e+02", 
+                     "/Volumes/One Touch/CUT_RUN/Logo_3_Elk4.png")
+```
+
+
+```{r}
+beta_cell_genes <- relevant_lost_genes %>%
+  filter(SYMBOL %in% c(
+    # Pancreatic progenitor/endocrine development TFs
+    "Pdx1", "Rfx6", "Isl1", "Mnx1", "Arx",
+    "Nkx6.1", "Nkx2.2", "Neurod1", "Neurog3",
+    "Mafa", "Foxa2", "Hnf4a", "Hnf1b", "Hnf1a",
+    "Pax4", "Pax6", "Sox9", "Onecut1",
+    # Insulin/Glucose
+    "Ins1", "Ins2", "Gcg", "Gck", "Slc2a2",
+    "Abcc8", "Kcnj11", "Pcsk1", "Pcsk2",
+    # Signaling
+    "Prkca", "Dyrk1a", "Adora2b",
+    "Prlr", "Iqgap2", "Cadm1",
+    # Metabolism
+    "Mat2a", "G6pc2", "Iapp",
+    # Other
+    "Tsc22d3", "Aatf", "Ctnnbl1"
+  ))
+
+print("Known pancreatic/beta cell genes lost:")
+print(beta_cell_genes %>%
+  dplyr::select(SYMBOL, GENENAME,
+                log2FoldChange, padj))
+
+```
+
+```{r}
+lost_genes_plot <- data.frame(
+  Gene = c("Adora2b","Iqgap2","Foxa2",
+           "Cadm1",
+           "Dyrk1a","Isl1","Prkca","Mafa",
+           "Pcsk1","Neurod1","Pax6","Pax4",
+           "Mnx1","Slc2a2","Abcc8","Gcg",
+           "Hnf1b","Hnf4a","Gck",
+           "Pcsk2","Hnf1a","Ins2","Ins1",
+           "Kcnj11"),
+  log2FC = c(-2.14,-1.94,-1.91,
+             -2.09,
+             -1.94,-1.66,-1.79,-1.47,
+             -1.37,-1.29,-1.37,-1.45,
+             -1.27,-1.43,-1.27,-1.08,
+             -1.10,-1.22,-1.24,
+             -0.95,-0.99,-1.40,-1.17,
+             -1.11),
+  pvalue = c(2.86e-05, 4.25e-05,
+             5.68e-05,
+             1.84e-04, 3.85e-04,
+             5.36e-04, 6.88e-04, 3.47e-03,
+             3.52e-03, 5.26e-03, 6.07e-03,
+             6.15e-03, 7.75e-03, 8.82e-03,
+             1.09e-02, 1.27e-02,
+             1.45e-02, 1.55e-02, 2.25e-02,
+             2.45e-02, 3.09e-02, 3.29e-02,
+             3.59e-02, 3.74e-02)
+) %>%
+  mutate(
+    category = case_when(
+      Gene %in% c("Foxa2","Mafa","Neurod1",
+                  "Pax4","Pax6","Hnf4a",
+                  "Isl1","Mnx1","Hnf1b",
+                  "Hnf1a") ~
+        "Developmental TF",
+      Gene %in% c("Ins1","Ins2","Gck",
+                  "Slc2a2","Gcg") ~
+        "Insulin/Glucagon",
+      Gene %in% c("Abcc8","Kcnj11") ~
+        "Ion Channel",
+      Gene %in% c("Prkca","Dyrk1a",
+                  "Adora2b") ~
+        "Signaling",
+      Gene %in% c("Pcsk1","Pcsk2") ~
+        "Processing",
+      Gene %in% c("Cadm1","Iqgap2") ~
+        "Cell Function",
+    ),
+    neg_log10_p = -log10(pvalue),
+    Gene = factor(Gene,
+                  levels = Gene[order(log2FC)])
+  )
+
+print(table(lost_genes_plot$category))
+
+lost_genes_bubble <- ggplot(
+  lost_genes_plot,
+  aes(x = log2FC,
+      y = Gene,
+      color = category,
+      size = neg_log10_p)) +
+  geom_point() +
+  geom_vline(xintercept = 0,
+             linetype = "dashed",
+             color = "grey50") +
+  scale_color_manual(values = c(
+    "Developmental TF"  = "#D73027",
+    "Insulin/Glucagon"  = "#FC8D59",
+    "Ion Channel"       = "#FFD700",
+    "Signaling"         = "#4575B4",
+    "Processing"        = "#800000",
+    "Cell Function"     = "#1A9850",
+    "Cell Survival"     = "#762A83"
+  )) +
+  scale_size_continuous(
+    name = "-log10(p-value)",
+    range = c(5, 14),
+    breaks = c(2, 3, 4),
+    guide = guide_legend(
+      override.aes = list(size = c(5, 8, 11))
+    )
+  ) +
+  guides(
+    color = guide_legend(
+      title = "Gene Category",
+      override.aes = list(size = 7)
+    )
+  ) +
+  theme_classic() +
+  labs(
+    title = "Pdx1∆207 Lost Ouccpancy at Target Genes",
+    x = "Log2 Fold Change (∆207 vs WT)",
+    y = "",
+    color = "Gene Category"
+  ) +
+  theme(
+    plot.title = element_text(
+      size = 24, face = "bold",
+      hjust = 0.5),
+    plot.subtitle = element_text(
+      size = 10, hjust = 0.5,
+      color = "grey50"),
+    axis.text.y = element_text(
+      size = 20,
+      face = "italic"),
+    axis.text.x = element_text(size = 17),
+    axis.title = element_text(size = 18),
+    legend.position = "right",
+    legend.text = element_text(size = 14),
+    legend.title = element_text(
+      size = 20,
+      face = "bold")
+  )
+
+lost_genes_bubble
+
+Cairo::Cairo(
+  file = "/Volumes/One Touch/CUT_RUN/Pdx1_Delta207_lost_genes_bubble_v4.png",
+  bg = "white", type = "png",
+  units = "in",
+  width = 10,
+  height = 11,  # increased height for additional genes
+  pointsize = 12, dpi = 300
+)
+print(lost_genes_bubble)
+dev.off()
+```
+
+
+
